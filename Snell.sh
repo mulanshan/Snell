@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="v5.0.1"
+VERSION=""  # 初始时版本号为空
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -9,6 +9,7 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 RESET='\033[0m'
 
+# 获取系统类型
 get_system_type() {
     if [ -f /etc/debian_version ]; then
         echo "debian"
@@ -19,6 +20,7 @@ get_system_type() {
     fi
 }
 
+# 等待包管理器
 wait_for_package_manager() {
     local system_type=$(get_system_type)
     if [ "$system_type" = "debian" ]; then
@@ -29,22 +31,24 @@ wait_for_package_manager() {
     fi
 }
 
+# 安装必要的软件包
 install_required_packages() {
     local system_type=$(get_system_type)
     echo -e "${GREEN}安装必要软件包${RESET}"
     
     if [ "$system_type" = "debian" ]; then
         apt update
-        apt install -y wget unzip curl
+        apt install -y wget unzip curl jq
     elif [ "$system_type" = "centos" ]; then
         yum -y update
-        yum -y install wget unzip curl
+        yum -y install wget unzip curl jq
     else
         echo -e "${RED}不支持的系统类型${RESET}"
         exit 1
     fi
 }
 
+# 检查当前用户是否为root
 check_root() {
     if [ "$(id -u)" != "0" ]; then
         echo -e "${RED}请以 root 权限运行此脚本.${RESET}"
@@ -52,24 +56,39 @@ check_root() {
     fi
 }
 
-get_latest_version() {
-    echo -e "${GREEN}正在获取 Snell 最新版本...${RESET}"
+# 从备用网页获取最新版本
+get_latest_version_from_website() {
+    echo -e "${GREEN}从备用网页获取 Snell 最新版本...${RESET}"
 
-    # 获取GitHub发布页面的最新版本信息
-    LATEST_VERSION=$(curl -s https://api.github.com/repos/passeway/Snell/releases/latest | jq -r .tag_name)
+    # 获取 Snell 发布说明页面并提取版本号
+    LATEST_VERSION=$(curl -s https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell#release-notes | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
 
     if [ -z "$LATEST_VERSION" ]; then
-        echo -e "${RED}无法获取最新版本号，请检查网络或GitHub API是否可用${RESET}"
-        exit 1
+        echo -e "${RED}从备用网页获取版本号失败！${RESET}"
+        return 1  # 失败返回
     fi
 
-    # 固定为amd64架构，忽略系统架构
-    SNELL_URL="https://github.com/passeway/Snell/releases/download/${LATEST_VERSION}/snell-server-${LATEST_VERSION}-linux-amd64.zip"
+    echo -e "${GREEN}从备用网页获取到最新版本：${LATEST_VERSION}${RESET}"
+    VERSION=$LATEST_VERSION
+    SNELL_URL="https://dl.nssurge.com/snell/snell-server-${VERSION}-linux-amd64.zip"
+    echo -e "${GREEN}下载链接：${SNELL_URL}${RESET}"
+    return 0  # 成功返回
+}
 
-    echo -e "${GREEN}最新版本：${LATEST_VERSION}${RESET}"
+# 如果自动获取版本失败，则提示用户手动输入版本号
+get_version_manually() {
+    echo -e "${RED}自动获取版本失败！${RESET}"
+    read -p "请输入手动版本号 (格式如：vX.X.X): " VERSION
+    if [ -z "$VERSION" ]; then
+        echo -e "${RED}版本号不能为空！${RESET}"
+        exit 1
+    fi
+    SNELL_URL="https://dl.nssurge.com/snell/snell-server-${VERSION}-linux-amd64.zip"
+    echo -e "${GREEN}使用手动输入的版本：${VERSION}${RESET}"
     echo -e "${GREEN}下载链接：${SNELL_URL}${RESET}"
 }
 
+# 安装 Snell
 install_snell() {
     echo -e "${GREEN}正在安装 Snell${RESET}"
 
@@ -80,7 +99,9 @@ install_snell() {
     }
 
     # 获取最新版本和下载链接
-    get_latest_version
+    if ! get_latest_version_from_website; then
+        get_version_manually  # 如果自动获取失败，手动输入版本号
+    fi
 
     wget ${SNELL_URL} -O snell-server.zip || {
         echo -e "${RED}下载 Snell 失败。${RESET}"
@@ -146,12 +167,13 @@ EOF
     IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
     echo -e "${GREEN}Snell 示例配置，项目地址: https://github.com/passeway/Snell${RESET}"
     cat << EOF > /etc/snell/config.txt
-${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = ${LATEST_VERSION}, reuse = true
+${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = ${VERSION}, reuse = true
 EOF
 
     cat /etc/snell/config.txt
 }
 
+# 更新 Snell
 update_snell() {
     if [ ! -f "/usr/local/bin/snell-server" ]; then
         echo -e "${YELLOW}Snell 未安装，跳过更新${RESET}"
@@ -162,13 +184,6 @@ update_snell() {
     systemctl stop snell
     wait_for_package_manager
     install_required_packages
-
-    ARCH=$(arch)
-    if [[ ${ARCH} == "aarch64" ]]; then
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${VERSION}-linux-aarch64.zip"
-    else
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${VERSION}-linux-amd64.zip"
-    fi
 
     wget ${SNELL_URL} -O snell-server.zip
     unzip -o snell-server.zip -d /usr/local/bin
@@ -181,6 +196,7 @@ update_snell() {
     cat /etc/snell/config.txt
 }
 
+# 卸载 Snell
 uninstall_snell() {
     echo -e "${GREEN}正在卸载 Snell${RESET}"
     systemctl stop snell
@@ -192,6 +208,7 @@ uninstall_snell() {
     echo -e "${GREEN}Snell 卸载成功${RESET}"
 }
 
+# 显示菜单
 show_menu() {
     clear
     check_snell_installed
@@ -298,3 +315,4 @@ main() {
 }
 
 main
+v
