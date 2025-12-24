@@ -1,3 +1,4 @@
+#!/bin/bash
 
 # --- 核心配置 ---
 VERSION="v5.0.1"
@@ -16,49 +17,40 @@ check_root() {
     fi
 }
 
-# --- Ubuntu 专属依赖安装 ---
+# --- 依赖安装 ---
 install_dependencies() {
-    echo -e "${GREEN}正在检查系统环境 (Ubuntu)...${RESET}"
+    echo -e "${GREEN}正在检查系统环境...${RESET}"
     
-    # 智能等待 apt 锁释放 (解决 Ubuntu 后台更新占用问题)
+    # 智能等待 apt 锁释放
     while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
-        echo -e "${YELLOW}检测到 apt 被占用，正在等待释放...${RESET}"
+        echo -e "${YELLOW}检测到 apt 被占用，等待释放...${RESET}"
         sleep 2
     done
 
-    echo -e "${GREEN}更新软件源并安装依赖...${RESET}"
+    echo -e "${GREEN}安装依赖...${RESET}"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get install -y wget unzip curl
 }
 
-# --- 核心状态检测 ---
-check_installed() {
-    if [ -f "/usr/local/bin/snell-server" ]; then return 0; else return 1; fi
-}
-
-check_running() {
-    systemctl is-active --quiet "snell.service"
-    return $?
-}
-
-# --- 操作函数 ---
+# --- 核心操作 ---
 start_snell() {
     systemctl start snell
-    echo -e "${GREEN}>>> 服务已启动${RESET}"
+    echo -e "${GREEN}>>> 已发送启动命令，正在等待服务响应...${RESET}"
+    sleep 2 # 等待状态刷新
 }
 
 stop_snell() {
     systemctl stop snell
-    echo -e "${GREEN}>>> 服务已停止${RESET}"
+    echo -e "${GREEN}>>> 已发送停止命令...${RESET}"
+    sleep 1
 }
 
 install_snell() {
     echo -e "${GREEN}=== 开始安装 Snell (${VERSION}) ===${RESET}"
-
     install_dependencies
 
-    # 架构检测 (优先匹配 AMD64)
+    # 架构检测
     ARCH=$(arch)
     if [[ ${ARCH} == "x86_64" || ${ARCH} == "amd64" ]]; then
         ARCH_TAG="amd64"
@@ -74,7 +66,7 @@ install_snell() {
     
     wget --no-check-certificate "${SNELL_URL}" -O snell-server.zip
     if [ $? -ne 0 ]; then
-        echo -e "${RED}下载失败，请检查网络连接。${RESET}"
+        echo -e "${RED}下载失败，请检查网络。${RESET}"
         rm -f snell-server.zip
         exit 1
     fi
@@ -83,22 +75,21 @@ install_snell() {
     rm snell-server.zip
     chmod +x /usr/local/bin/snell-server
 
-    # --- 端口选择 ---
+    # 端口选择
     echo -e "----------------------------------------"
     read -p "请输入端口号 (1-65535) [留空则随机]: " USER_PORT
     if [[ -z "${USER_PORT}" ]]; then
         PORT=$(shuf -i 30000-65000 -n 1)
-        echo -e "已选择随机端口: ${GREEN}${PORT}${RESET}"
+        echo -e "随机端口: ${GREEN}${PORT}${RESET}"
     else
         PORT=${USER_PORT}
-        echo -e "已选择指定端口: ${GREEN}${PORT}${RESET}"
+        echo -e "指定端口: ${GREEN}${PORT}${RESET}"
     fi
     echo -e "----------------------------------------"
 
     # 生成配置
     PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
     mkdir -p /etc/snell
-    
     cat > /etc/snell/snell-server.conf << EOF
 [snell-server]
 listen = ::0:${PORT}
@@ -107,7 +98,7 @@ ipv6 = true
 obfs = off
 EOF
 
-    # 配置 Systemd
+    # 配置服务
     cat > /etc/systemd/system/snell.service << EOF
 [Unit]
 Description=Snell Proxy Service
@@ -135,22 +126,16 @@ EOF
 }
 
 update_snell() {
-    if ! check_installed; then
-        echo -e "${YELLOW}未安装 Snell，无法更新。${RESET}"
-        return
-    fi
-
-    echo -e "${GREEN}正在更新至 ${VERSION}...${RESET}"
+    if [ ! -f "/usr/local/bin/snell-server" ]; then echo -e "${YELLOW}未安装${RESET}"; return; fi
+    echo -e "${GREEN}更新中...${RESET}"
     systemctl stop snell
     install_dependencies
-    
     wget --no-check-certificate "https://dl.nssurge.com/snell/snell-server-${VERSION}-linux-amd64.zip" -O snell-server.zip
     unzip -o snell-server.zip -d /usr/local/bin
     rm snell-server.zip
     chmod +x /usr/local/bin/snell-server
-    
     systemctl restart snell
-    echo -e "${GREEN}更新成功！${RESET}"
+    echo -e "${GREEN}更新完毕${RESET}"
     show_config
 }
 
@@ -162,15 +147,14 @@ uninstall_snell() {
     systemctl daemon-reload
     rm -f /usr/local/bin/snell-server
     rm -rf /etc/snell
-    echo -e "${GREEN}卸载完毕。${RESET}"
+    echo -e "${GREEN}卸载完毕${RESET}"
 }
 
 show_config() {
     CONF="/etc/snell/snell-server.conf"
     if [ ! -f "${CONF}" ]; then echo -e "${RED}配置文件不存在${RESET}"; return; fi
 
-    PORT_LINE=$(grep 'listen' ${CONF})
-    PORT=$(echo "$PORT_LINE" | awk -F':' '{print $NF}' | tr -d ' ')
+    PORT=$(grep 'listen' ${CONF} | awk -F':' '{print $NF}' | tr -d ' ')
     PSK=$(grep 'psk' ${CONF} | cut -d'=' -f2 | tr -d ' ')
     OBFS=$(grep 'obfs' ${CONF} | cut -d'=' -f2 | tr -d ' ')
     
@@ -188,33 +172,45 @@ show_config() {
     echo -e "${GREEN}======================${RESET}"
 }
 
-# --- 菜单逻辑 ---
+# --- 菜单逻辑 (修复显示问题) ---
 show_menu() {
     clear
-    if check_installed; then
+    
+    # 1. 判断安装状态
+    if [ -f "/usr/local/bin/snell-server" ]; then
+        IS_INSTALLED=true
         STATUS="${GREEN}已安装${RESET}"
         VER=$(/usr/local/bin/snell-server -v 2>&1 | grep -o 'v[0-9.]*')
-        
-        # 智能判断菜单显示
-        if check_running; then 
-            RUNSTATE="${GREEN}运行中${RESET}"
-            TOGGLE_TEXT="停止服务"
-        else 
-            RUNSTATE="${RED}未运行${RESET}"
-            TOGGLE_TEXT="启动服务"
-        fi
     else
-        STATUS="${RED}未安装${RESET}"; RUNSTATE="${RED}未运行${RESET}"; VER="-"; TOGGLE_TEXT="启动/停止"
+        IS_INSTALLED=false
+        STATUS="${RED}未安装${RESET}"
+        VER="-"
     fi
 
-    echo -e "${GREEN}=== Snell 管理脚本 (Ubuntu/AMD专用) ===${RESET}"
+    # 2. 判断运行状态 (直接检测，不依赖函数)
+    if systemctl is-active --quiet snell; then
+        IS_RUNNING=true
+        RUNSTATE="${GREEN}运行中${RESET}"
+    else
+        IS_RUNNING=false
+        RUNSTATE="${RED}未运行${RESET}"
+    fi
+
+    echo -e "${GREEN}=== Snell 管理脚本 (Ubuntu AMD专用) ===${RESET}"
     echo -e "状态: ${STATUS} | 运行: ${RUNSTATE} | 版本: ${GREEN}${VER}${RESET}"
     echo ""
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
-    if check_installed; then
-        echo "3. ${TOGGLE_TEXT}"
+    
+    # 3. 动态显示选项 3
+    if [ "$IS_INSTALLED" = true ]; then
+        if [ "$IS_RUNNING" = true ]; then
+            echo "3. 停止服务"
+        else
+            echo "3. 启动服务"
+        fi
     fi
+
     echo "4. 更新 Snell"
     echo "5. 查看配置"
     echo "0. 退出"
@@ -225,10 +221,11 @@ show_menu() {
         1) install_snell ;;
         2) uninstall_snell ;;
         3) 
-            if check_installed; then
-                if check_running; then stop_snell; else start_snell; fi
+            if [ "$IS_INSTALLED" = true ]; then
+                if [ "$IS_RUNNING" = true ]; then stop_snell; else start_snell; fi
             else
                 echo -e "${RED}请先安装 Snell${RESET}"
+                sleep 1
             fi 
             ;;
         4) update_snell ;;
@@ -236,11 +233,11 @@ show_menu() {
         0) exit 0 ;;
         *) echo -e "${RED}无效选项${RESET}" ;;
     esac
-    echo ""; read -p "按回车继续..."
 }
 
 check_root
 while true; do show_menu; done
+
 
 check_root
 while true; do show_menu; done
