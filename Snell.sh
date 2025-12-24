@@ -111,8 +111,17 @@ install_snell() {
 
     rm snell-server.zip
     chmod +x /usr/local/bin/snell-server
-    RANDOM_PORT=$(shuf -i 30000-65000 -n 1)
+    
+    # 端口默认随机，用户也可以指定
+    RANDOM_PORT=$(shuf -i 30000-65000 -n 1)  # 默认生成随机端口
+    read -p "请输入指定端口（默认为随机端口 ${RANDOM_PORT}）： " USER_PORT
+    if [ -n "$USER_PORT" ]; then
+        RANDOM_PORT=$USER_PORT  # 如果用户指定端口，则使用用户输入的端口
+    fi
+
+    # PSK默认随机生成
     RANDOM_PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
+
 
     if ! id "snell" &>/dev/null; then
         useradd -r -s /usr/sbin/nologin snell
