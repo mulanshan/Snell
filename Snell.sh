@@ -49,10 +49,10 @@ install_dependencies() {
 
 # --- 核心功能 ---
 
-# 询问版本号的通用函数
 ask_version() {
-    echo -e "请输入要安装的版本号"
-    read -p "默认 [${DEFAULT_VERSION}]: " INPUT_VERSION
+    echo -e "----------------------------------------"
+    echo -e "请选择安装版本"
+    read -p "输入版本号 [默认 ${DEFAULT_VERSION}]: " INPUT_VERSION
     if [ -z "${INPUT_VERSION}" ]; then
         VERSION="${DEFAULT_VERSION}"
     else
@@ -92,22 +92,47 @@ install_snell() {
     chmod +x snell-server
     mv -f snell-server ${BIN_PATH}
 
-    # 4. 配置生成 (仅当不存在时)
+    # 4. 配置生成 (仅当配置不存在时触发交互)
     if [ ! -f ${CONF} ]; then
         mkdir -p /etc/snell
-        PORT=$(shuf -i 10000-65000 -n 1)
+        
+        # --- 定制 1: 端口选择 ---
+        echo -e "----------------------------------------"
+        read -p "请输入端口号 (1-65535) [留空则随机]: " USER_PORT
+        if [[ -z "${USER_PORT}" ]]; then
+            PORT=$(shuf -i 10000-65000 -n 1)
+            echo -e "已选择随机端口: ${GREEN}${PORT}${PLAIN}"
+        else
+            PORT=${USER_PORT}
+            echo -e "已选择指定端口: ${GREEN}${PORT}${PLAIN}"
+        fi
+
+        # --- 定制 2: IPv6 选择 ---
+        echo -e "----------------------------------------"
+        read -p "是否开启 IPv6? (y/n) [默认 y]: " USER_IPV6
+        if [[ "${USER_IPV6}" == "n" || "${USER_IPV6}" == "N" ]]; then
+            IPV6_VAL="false"
+            LISTEN_ADDR="0.0.0.0"  # 关闭IPv6时仅监听IPv4
+            echo -e "IPv6 开关: ${YELLOW}关闭${PLAIN}"
+        else
+            IPV6_VAL="true"
+            LISTEN_ADDR="::0"      # 开启IPv6时监听双栈
+            echo -e "IPv6 开关: ${GREEN}开启${PLAIN}"
+        fi
+
         PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
         
+        # 写入配置文件
         cat > ${CONF} <<-EOF
 [snell-server]
-listen = ::0:${PORT}
+listen = ${LISTEN_ADDR}:${PORT}
 psk = ${PSK}
-ipv6 = true
+ipv6 = ${IPV6_VAL}
 obfs = http
 EOF
         echo -e "${GREEN}配置文件已生成。${PLAIN}"
     else
-        echo -e "${YELLOW}检测到现有配置，保留旧配置。${PLAIN}"
+        echo -e "${YELLOW}检测到现有配置，跳过配置生成（保留旧配置）。${PLAIN}"
     fi
 
     # 5. Systemd 服务
@@ -163,27 +188,21 @@ show_config() {
         return
     fi
 
-    # 实时读取配置，而不是读死文件
-    PORT=$(grep 'listen' ${CONF} | cut -d':' -f4)
-    # 如果是 ipv4 监听格式 (0.0.0.0:端口)，尝试另一种截取
-    if [ -z "$PORT" ]; then
-        PORT=$(grep 'listen' ${CONF} | cut -d':' -f2)
-    fi
-    # 去除空格
-    PORT=$(echo $PORT | tr -d ' ')
+    # 智能读取端口 (兼容 ::0:端口 和 0.0.0.0:端口 两种格式)
+    PORT_LINE=$(grep 'listen' ${CONF})
+    PORT=$(echo "$PORT_LINE" | awk -F':' '{print $NF}' | tr -d ' ')
     
     PSK=$(grep 'psk' ${CONF} | cut -d'=' -f2 | tr -d ' ')
+    IPV6_STATUS=$(grep 'ipv6' ${CONF} | cut -d'=' -f2 | tr -d ' ')
     
-    # 获取公网IP
     PUBLIC_IP=$(curl -s4m8 ip.sb || curl -s4m8 ifconfig.me)
 
-    # 尝试获取版本号
+    # 获取版本号
     CURRENT_VER_STR=$(${BIN_PATH} -v 2>&1)
-    # 提取主版本号 (例如 v5.0.1 -> 5)
     if [[ $CURRENT_VER_STR =~ v([0-9]+) ]]; then
         VER_MAJOR=${BASH_REMATCH[1]}
     else
-        VER_MAJOR=5 # 默认兜底
+        VER_MAJOR=5
     fi
 
     clear
@@ -191,6 +210,7 @@ show_config() {
     echo -e "IP 地址 : ${PUBLIC_IP}"
     echo -e "端口    : ${PORT}"
     echo -e "PSK 密钥: ${PSK}"
+    echo -e "IPv6    : ${IPV6_STATUS}"
     echo -e "混淆    : http"
     echo -e "版本    : ${CURRENT_VER_STR}"
     echo -e "${GREEN}======================${PLAIN}"
@@ -210,13 +230,13 @@ show_status() {
 # --- 菜单 ---
 show_menu() {
     clear
-    echo -e "${GREEN}=== Snell 管理脚本 (纯净版) ===${PLAIN}"
+    echo -e "${GREEN}=== Snell 管理脚本 (定制版) ===${PLAIN}"
     show_status
     echo ""
     echo "1. 安装 Snell"
-    echo "2. 更新 Snell (支持自定义版本)"
+    echo "2. 更新 Snell"
     echo "3. 卸载 Snell"
-    echo "4. 查看 配置信息 (Surge链接)"
+    echo "4. 查看 配置信息"
     echo "5. 启动 服务"
     echo "6. 停止 服务"
     echo "7. 重启 服务"
@@ -237,7 +257,6 @@ show_menu() {
     esac
 }
 
-# --- 入口 ---
 check_root
 while true; do
     show_menu
