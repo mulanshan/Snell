@@ -1,3 +1,4 @@
+
 # --- 核心配置 ---
 VERSION="v5.0.1"
 
@@ -17,22 +18,21 @@ check_root() {
 
 # --- Ubuntu 专属依赖安装 ---
 install_dependencies() {
-    echo -e "${GREEN}正在检查系统环境 (Ubuntu/Debian)...${RESET}"
+    echo -e "${GREEN}正在检查系统环境 (Ubuntu)...${RESET}"
     
-    # 检测并等待 apt 锁释放 (解决 Ubuntu 常见占用问题)
+    # 智能等待 apt 锁释放 (解决 Ubuntu 后台更新占用问题)
     while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
         echo -e "${YELLOW}检测到 apt 被占用，正在等待释放...${RESET}"
         sleep 2
     done
 
     echo -e "${GREEN}更新软件源并安装依赖...${RESET}"
-    # 使用非交互模式安装，避免卡住
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get install -y wget unzip curl
 }
 
-# --- 核心功能函数 ---
+# --- 核心状态检测 ---
 check_installed() {
     if [ -f "/usr/local/bin/snell-server" ]; then return 0; else return 1; fi
 }
@@ -42,14 +42,15 @@ check_running() {
     return $?
 }
 
+# --- 操作函数 ---
 start_snell() {
     systemctl start snell
-    echo -e "${GREEN}服务已启动${RESET}"
+    echo -e "${GREEN}>>> 服务已启动${RESET}"
 }
 
 stop_snell() {
     systemctl stop snell
-    echo -e "${GREEN}服务已停止${RESET}"
+    echo -e "${GREEN}>>> 服务已停止${RESET}"
 }
 
 install_snell() {
@@ -57,7 +58,7 @@ install_snell() {
 
     install_dependencies
 
-    # 架构检测 (针对 AMD64)
+    # 架构检测 (优先匹配 AMD64)
     ARCH=$(arch)
     if [[ ${ARCH} == "x86_64" || ${ARCH} == "amd64" ]]; then
         ARCH_TAG="amd64"
@@ -68,7 +69,6 @@ install_snell() {
         exit 1
     fi
 
-    # 下载
     SNELL_URL="https://dl.nssurge.com/snell/snell-server-${VERSION}-linux-${ARCH_TAG}.zip"
     echo -e "正在下载: ${SNELL_URL}"
     
@@ -98,6 +98,7 @@ install_snell() {
     # 生成配置
     PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
     mkdir -p /etc/snell
+    
     cat > /etc/snell/snell-server.conf << EOF
 [snell-server]
 listen = ::0:${PORT}
@@ -143,7 +144,6 @@ update_snell() {
     systemctl stop snell
     install_dependencies
     
-    # 仅下载替换二进制文件
     wget --no-check-certificate "https://dl.nssurge.com/snell/snell-server-${VERSION}-linux-amd64.zip" -O snell-server.zip
     unzip -o snell-server.zip -d /usr/local/bin
     rm snell-server.zip
@@ -169,14 +169,12 @@ show_config() {
     CONF="/etc/snell/snell-server.conf"
     if [ ! -f "${CONF}" ]; then echo -e "${RED}配置文件不存在${RESET}"; return; fi
 
-    # 实时读取配置
     PORT_LINE=$(grep 'listen' ${CONF})
     PORT=$(echo "$PORT_LINE" | awk -F':' '{print $NF}' | tr -d ' ')
     PSK=$(grep 'psk' ${CONF} | cut -d'=' -f2 | tr -d ' ')
     OBFS=$(grep 'obfs' ${CONF} | cut -d'=' -f2 | tr -d ' ')
     
     HOST_IP=$(curl -s4m8 ip.sb || curl -s4m8 ifconfig.me)
-    
     if [[ "$OBFS" == "http" ]]; then OBFS_PART=", obfs=http"; SHOW_OBFS="http"; else OBFS_PART=""; SHOW_OBFS="off"; fi
 
     echo -e "${GREEN}=== Snell 配置信息 ===${RESET}"
@@ -196,27 +194,43 @@ show_menu() {
     if check_installed; then
         STATUS="${GREEN}已安装${RESET}"
         VER=$(/usr/local/bin/snell-server -v 2>&1 | grep -o 'v[0-9.]*')
-        if check_running; then RUNSTATE="${GREEN}运行中${RESET}"; else RUNSTATE="${RED}未运行${RESET}"; fi
+        
+        # 智能判断菜单显示
+        if check_running; then 
+            RUNSTATE="${GREEN}运行中${RESET}"
+            TOGGLE_TEXT="停止服务"
+        else 
+            RUNSTATE="${RED}未运行${RESET}"
+            TOGGLE_TEXT="启动服务"
+        fi
     else
-        STATUS="${RED}未安装${RESET}"; RUNSTATE="${RED}未运行${RESET}"; VER="-"
+        STATUS="${RED}未安装${RESET}"; RUNSTATE="${RED}未运行${RESET}"; VER="-"; TOGGLE_TEXT="启动/停止"
     fi
 
-    echo -e "${GREEN}=== Snell 管理脚本 (Ubuntu AMD专用版) ===${RESET}"
+    echo -e "${GREEN}=== Snell 管理脚本 (Ubuntu/AMD专用) ===${RESET}"
     echo -e "状态: ${STATUS} | 运行: ${RUNSTATE} | 版本: ${GREEN}${VER}${RESET}"
     echo ""
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
-    echo "3. 启停控制"
+    if check_installed; then
+        echo "3. ${TOGGLE_TEXT}"
+    fi
     echo "4. 更新 Snell"
     echo "5. 查看配置"
     echo "0. 退出"
-    echo -e "${GREEN}=========================================${RESET}"
+    echo -e "${GREEN}=======================================${RESET}"
     read -p "请输入选项: " choice
 
     case "${choice}" in
         1) install_snell ;;
         2) uninstall_snell ;;
-        3) if check_running; then stop_snell; else start_snell; fi ;;
+        3) 
+            if check_installed; then
+                if check_running; then stop_snell; else start_snell; fi
+            else
+                echo -e "${RED}请先安装 Snell${RESET}"
+            fi 
+            ;;
         4) update_snell ;;
         5) show_config ;;
         0) exit 0 ;;
@@ -224,6 +238,9 @@ show_menu() {
     esac
     echo ""; read -p "按回车继续..."
 }
+
+check_root
+while true; do show_menu; done
 
 check_root
 while true; do show_menu; done
