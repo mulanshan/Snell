@@ -36,13 +36,13 @@ install_dependencies() {
 # --- 核心操作 ---
 start_snell() {
     systemctl start snell
-    echo -e "${GREEN}>>> 已发送启动命令，正在等待服务响应...${RESET}"
-    sleep 2 # 等待状态刷新
+    echo -e "${GREEN}>>> 已发送启动命令${RESET}"
+    sleep 1
 }
 
 stop_snell() {
     systemctl stop snell
-    echo -e "${GREEN}>>> 已发送停止命令...${RESET}"
+    echo -e "${GREEN}>>> 已发送停止命令${RESET}"
     sleep 1
 }
 
@@ -172,11 +172,11 @@ show_config() {
     echo -e "${GREEN}======================${RESET}"
 }
 
-# --- 菜单逻辑 (修复显示问题) ---
+# --- 菜单逻辑 (已修复闪退问题) ---
 show_menu() {
     clear
     
-    # 1. 判断安装状态
+    # 状态检测
     if [ -f "/usr/local/bin/snell-server" ]; then
         IS_INSTALLED=true
         STATUS="${GREEN}已安装${RESET}"
@@ -187,7 +187,6 @@ show_menu() {
         VER="-"
     fi
 
-    # 2. 判断运行状态 (直接检测，不依赖函数)
     if systemctl is-active --quiet snell; then
         IS_RUNNING=true
         RUNSTATE="${GREEN}运行中${RESET}"
@@ -202,7 +201,7 @@ show_menu() {
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
     
-    # 3. 动态显示选项 3
+    # 智能显示启停
     if [ "$IS_INSTALLED" = true ]; then
         if [ "$IS_RUNNING" = true ]; then
             echo "3. 停止服务"
@@ -225,7 +224,6 @@ show_menu() {
                 if [ "$IS_RUNNING" = true ]; then stop_snell; else start_snell; fi
             else
                 echo -e "${RED}请先安装 Snell${RESET}"
-                sleep 1
             fi 
             ;;
         4) update_snell ;;
@@ -233,11 +231,11 @@ show_menu() {
         0) exit 0 ;;
         *) echo -e "${RED}无效选项${RESET}" ;;
     esac
+
+    # --- 关键修复：操作完成后暂停，防止屏幕清空看不到结果 ---
+    echo ""
+    read -p "按回车键继续..."
 }
-
-check_root
-while true; do show_menu; done
-
 
 check_root
 while true; do show_menu; done
