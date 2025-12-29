@@ -132,7 +132,7 @@ install_snell() {
 [snell-server]
 listen = ::0:${RANDOM_PORT}
 psk = ${RANDOM_PSK}
-ipv6 = false
+ipv6 = true
 EOF
 
     cat > /etc/systemd/system/snell.service << EOF
